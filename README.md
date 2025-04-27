@@ -56,6 +56,29 @@ source venv/bin/activate  # On Windows, use: venv\Scripts\activate
 pip install -r requirements.txt
 ```
 
+## API Keys Configuration
+
+This application requires two API keys to enable weather data retrieval and route visualization:
+
+1. **OpenWeatherMap API Key** - For real-time weather data
+2. **Google Maps API Key** - For route visualization and distance calculation
+
+Create a `.env` file in the project root directory with the following contents:
+
+```
+weather_api=YOUR_OPENWEATHERMAP_API_KEY
+google_maps=YOUR_GOOGLE_MAPS_API_KEY
+```
+
+### How to obtain the API keys:
+
+- **OpenWeatherMap API Key**: Register at [OpenWeatherMap](https://openweathermap.org/api) and get a free API key
+- **Google Maps API Key**: Get a key from the [Google Cloud Console](https://developers.google.com/maps/documentation/embed/get-api-key)
+
+Note: The application will still work without these keys, but with limited functionality:
+- Without the weather API key, you'll need to input weather data manually
+- Without the Google Maps API key, a simplified map will be shown without route details
+
 ## Running the Application
 
 You can run the application in two ways:
@@ -81,6 +104,7 @@ Either option will launch the application at http://localhost:8501.
 - **Interactive Dashboard**: Visualize surge pricing patterns and trends
 - **Custom Model Training**: Train models with your own data and feature selection
 - **Weather Integration**: See how weather conditions affect surge pricing
+- **Google Maps Integration**: Visualize routes between pickup and dropoff locations
 
 ## Data Requirements
 

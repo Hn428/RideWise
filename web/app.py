@@ -23,20 +23,65 @@ sys.path.append(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 # NOTE: This application now uses Google Maps for route visualization.
 # To use this feature, you need to:
 # 1. Get a Google Maps API key from https://developers.google.com/maps/documentation/embed/get-api-key
-# 2. Add the key to your .env file as: google_maps=YOUR_API_KEY_HERE
+# 2. Add the key to your .env file as: google_maps_api_key=YOUR_API_KEY_HERE
 # 
 # If no API key is provided, the app will fallback to a simple map without routing.
 # -------------------------------------------------------------------------
 
 # Load environment variables
 load_dotenv()
-WEATHER_API_KEY = os.getenv("weather_api")
-GOOGLE_MAPS_API_KEY = os.getenv("google_maps")  # Add Google Maps API key
+WEATHER_API_KEY = os.getenv("weather_api_key")
+GOOGLE_MAPS_API_KEY = os.getenv("google_maps_api_key")  # Add Google Maps API key
 
 # Fix for SSL certificate verification issues - FOR TESTING ONLY
 ssl._create_default_https_context = ssl._create_unverified_context
 urllib3.disable_warnings(urllib3.exceptions.InsecureRequestWarning)
 requests.packages.urllib3.disable_warnings()
+
+def get_uber_access_token():
+    """
+    Get an OAuth 2.0 access token using client credentials.
+    
+    Returns:
+        The access token string or None if authentication fails
+    """
+    global UBER_ACCESS_TOKEN
+    
+    # Return existing token if we already have one
+    if UBER_ACCESS_TOKEN:
+        return UBER_ACCESS_TOKEN
+    
+    # Check if we have the required credentials
+    if not UBER_CLIENT_ID or not UBER_CLIENT_SECRET:
+        st.warning("Uber client credentials not found in .env file")
+        return None
+    
+    try:
+        # OAuth 2.0 token endpoint
+        url = "https://auth.uber.com/oauth/v2/token"
+        
+        # Prepare form data for the token request
+        data = {
+            'client_id': UBER_CLIENT_ID,
+            'client_secret': UBER_CLIENT_SECRET,
+            'grant_type': 'client_credentials',
+            'scope': 'pricing'  # Add required scopes separated by spaces
+        }
+        
+        # Make the token request
+        response = requests.post(url, data=data)
+        
+        # Check if the request was successful
+        if response.status_code == 200:
+            token_data = response.json()
+            UBER_ACCESS_TOKEN = token_data.get('access_token')
+            return UBER_ACCESS_TOKEN
+        else:
+            st.error(f"Error getting Uber access token: {response.status_code} - {response.text}")
+            return None
+    except Exception as e:
+        st.error(f"Exception while getting Uber access token: {str(e)}")
+        return None
 
 # Direct Nominatim geocoding function that bypasses SSL verification
 def geocode_address(address):
@@ -107,6 +152,59 @@ def get_google_maps_distance(source_lat, source_long, dest_lat, dest_long):
         
     return None
 
+def get_uber_price_estimates(source_lat, source_long, dest_lat, dest_long):
+    """
+    Get Uber price estimates for a ride between source and destination.
+    
+    Args:
+        source_lat: Source latitude
+        source_long: Source longitude
+        dest_lat: Destination latitude
+        dest_long: Destination longitude
+        
+    Returns:
+        Dictionary with ride options and their price/time estimates or None if API call fails
+    """
+    if not UBER_ACCESS_TOKEN:
+        return None
+        
+    try:
+        # Uber Price Estimates API endpoint
+        url = "https://api.uber.com/v1.2/estimates/price"
+        
+        # Parameters for the API call
+        params = {
+            "start_latitude": source_lat,
+            "start_longitude": source_long,
+            "end_latitude": dest_lat,
+            "end_longitude": dest_long
+        }
+        
+        # Headers including the authorization
+        # Uber uses server_token authorization for this endpoint
+        headers = {
+            "Authorization": f"Bearer {UBER_ACCESS_TOKEN}",
+            "Accept-Language": "en_US",
+            "Content-Type": "application/json"
+        }
+        
+        # Make the API request
+        response = requests.get(url, params=params, headers=headers)
+        
+        # For debugging
+        st.debug(f"Uber API Response: {response.status_code} - {response.text}")
+        
+        # Check if request was successful
+        if response.status_code == 200:
+            data = response.json()
+            return data.get("prices", [])
+        else:
+            st.error(f"Error fetching Uber prices: {response.status_code} - {response.text}")
+            return None
+    except Exception as e:
+        st.error(f"Exception while fetching Uber prices: {str(e)}")
+        return None
+
 def get_weather_emoji(weather_type):
     """Get appropriate emoji for weather type"""
     weather_emojis = {
@@ -128,7 +226,7 @@ def get_weather_emoji(weather_type):
 
 def get_weather_background_css(hour, weather_type):
     """
-    Generate CSS for Uber-like styling
+    Generate CSS for ride-hailing app styling
     
     Args:
         hour: Current hour (0-23)
@@ -137,9 +235,9 @@ def get_weather_background_css(hour, weather_type):
     Returns:
         CSS string for styling
     """
-    # Use Uber's color scheme regardless of time/weather
+    # Use a consistent color scheme regardless of time/weather
     bg_colors = ["#000000", "#121212"]  # Black to very dark gray
-    accent_color = "#27B666"  # Uber green
+    accent_color = "#27B666"  # Green accent color
     
     # Create CSS for styling
     css = f"""
@@ -159,14 +257,14 @@ def get_weather_background_css(hour, weather_type):
         margin-bottom: 10px;
         border: 1px solid rgba(39, 182, 102, 0.3);
     }}
-    /* Additional Uber-like styling */
+    /* Additional app styling */
     .stButton > button {{
         background-color: {accent_color};
         color: white;
         border: none;
         font-weight: 500;
     }}
-    /* Make success messages green like Uber */
+    /* Make success messages green */
     .element-container .stAlert.st-ae.st-af {{
         border-left-color: {accent_color} !important;
     }}
@@ -269,49 +367,40 @@ from src.model import SurgePredictor
 # Import utility functions from src.utils or define them here
 def calculate_base_price(distance: float, product_id: str, is_rush_hour: bool = False) -> float:
     """
-    Calculate base price for a ride, considering service level.
+    Calculate base price based on distance and product type.
     
     Args:
-        distance: Distance in kilometers
+        distance: Distance in km
         product_id: Service level (e.g., 'UberX', 'Black', 'Lux')
-        is_rush_hour: Whether the ride is during rush hour
+        is_rush_hour: Whether it's rush hour or not
         
     Returns:
-        Base price for the ride
+        Base price for the trip
     """
-    # Base rates and multipliers per service level (example values)
-    service_level_modifiers = {
-        # Uber
+    price_per_km = {
+        # Ride-hailing services
         "UberX":      {'base': 2.50, 'per_km': 1.75},
         "UberXL":     {'base': 3.50, 'per_km': 2.10},
         "UberPOOL":   {'base': 2.00, 'per_km': 1.50}, # Hypothetical
         "Black":      {'base': 7.00, 'per_km': 3.25},
-        "SUV":        {'base': 14.00, 'per_km': 4.00}, # Assuming Black XL is SUV
-        # Lyft
-        "Lyft":       {'base': 2.50, 'per_km': 1.70},
-        "Lyft XL":    {'base': 3.50, 'per_km': 2.05},
-        "Lux":        {'base': 6.50, 'per_km': 3.10},
-        "Lux Black":  {'base': 12.00, 'per_km': 3.80},
-        "Lux Black XL":{'base': 15.00, 'per_km': 4.20},
-        # Add defaults for any missing/unrecognized IDs
-        "Shared":     {'base': 2.00, 'per_km': 1.50},
-        "Default":    {'base': 2.50, 'per_km': 1.75}
+        "SUV":        {'base': 14.00, 'per_km': 3.80},
+        "Lux":        {'base': 6.00, 'per_km': 3.00},
+        "Lux Black":  {'base': 9.00, 'per_km': 3.50},
+        "Lux Black XL": {'base': 12.00, 'per_km': 4.00},
     }
     
-    # Get modifiers for the selected product_id, fallback to default
-    modifiers = service_level_modifiers.get(product_id, service_level_modifiers["Default"])
-    base_rate = modifiers['base']
-    per_km_rate = modifiers['per_km']
+    if product_id not in price_per_km:
+        product_id = "UberX"  # Default to UberX pricing
     
-    # Rush hour multiplier
-    rush_hour_multiplier = 1.2 if is_rush_hour else 1.0
+    # Calculate base price
+    base_fee = price_per_km[product_id]['base']
+    km_fee = price_per_km[product_id]['per_km'] * distance
     
-    # Calculate final base price
-    calculated_price = (base_rate + (distance * per_km_rate)) * rush_hour_multiplier
+    # Apply rush hour pricing (20% increase)
+    if is_rush_hour:
+        return (base_fee + km_fee) * 1.2
     
-    # Ensure minimum price (e.g., $5)
-    min_price = 5.0
-    return max(calculated_price, min_price)
+    return base_fee + km_fee
 
 def format_prediction_output(predicted_surge: float, base_price: float) -> dict:
     """
@@ -804,7 +893,7 @@ def display_prediction_tab():
         
         For the best experience with route visualization, please:
         1. Get a Google Maps API key from the [Google Cloud Console](https://developers.google.com/maps/documentation/embed/get-api-key)
-        2. Add the key to your `.env` file as `google_maps=YOUR_API_KEY_HERE`
+        2. Add the key to your `.env` file as `google_maps_api_key=YOUR_API_KEY_HERE`
         3. Restart the application
         
         The app will continue to work with limited mapping functionality.
@@ -1130,7 +1219,7 @@ def display_prediction_tab():
                 if GOOGLE_MAPS_API_KEY:
                     return f"{base_url}?key={GOOGLE_MAPS_API_KEY}&mode={mode}&origin={origin}&destination={destination}"
                 else:
-                    st.warning("Google Maps API key not found. Please add it to your .env file as 'google_maps'.")
+                    st.warning("Google Maps API key not found. Please add it to your .env file as 'google_maps_api_key'.")
                     return None
             
             # Get the embed URL
@@ -1171,6 +1260,63 @@ def display_prediction_tab():
                 is_rush_hour_final = 1
             base_price = calculate_base_price(distance, 'UberX', is_rush_hour_final)
             st.metric("Est. Base Price", f"${base_price:.2f}")
+        
+        # Show estimated ride prices
+        st.subheader("Estimated Ride Prices")
+        est_col1, est_col2, est_col3 = st.columns(3)
+        
+        with est_col1:
+            uberx_price = calculate_base_price(distance, 'UberX', is_rush_hour_final)
+            st.markdown(f"""
+            <div style="padding: 15px; background-color: rgba(34, 34, 34, 0.8); border-radius: 10px; 
+                        margin-bottom: 15px; border: 1px solid rgba(39, 182, 102, 0.3);">
+                <h3 style="margin-top: 0; text-align: center; color: white;">UberX</h3>
+                <div style="display: flex; justify-content: space-between; margin-bottom: 10px;">
+                    <span>Price:</span>
+                    <span><b>${uberx_price:.2f}</b></span>
+                </div>
+                <div style="display: flex; justify-content: space-between; margin-bottom: 10px;">
+                    <span>ETA:</span>
+                    <span><b>{est_time_mins} min</b></span>
+                </div>
+            </div>
+            """, unsafe_allow_html=True)
+        
+        with est_col2:
+            uberxl_price = calculate_base_price(distance, 'UberXL', is_rush_hour_final)
+            st.markdown(f"""
+            <div style="padding: 15px; background-color: rgba(34, 34, 34, 0.8); border-radius: 10px; 
+                        margin-bottom: 15px; border: 1px solid rgba(39, 182, 102, 0.3);">
+                <h3 style="margin-top: 0; text-align: center; color: white;">UberXL</h3>
+                <div style="display: flex; justify-content: space-between; margin-bottom: 10px;">
+                    <span>Price:</span>
+                    <span><b>${uberxl_price:.2f}</b></span>
+                </div>
+                <div style="display: flex; justify-content: space-between; margin-bottom: 10px;">
+                    <span>ETA:</span>
+                    <span><b>{est_time_mins} min</b></span>
+                </div>
+            </div>
+            """, unsafe_allow_html=True)
+        
+        with est_col3:
+            black_price = calculate_base_price(distance, 'Black', is_rush_hour_final)
+            st.markdown(f"""
+            <div style="padding: 15px; background-color: rgba(34, 34, 34, 0.8); border-radius: 10px; 
+                        margin-bottom: 15px; border: 1px solid rgba(39, 182, 102, 0.3);">
+                <h3 style="margin-top: 0; text-align: center; color: white;">Black</h3>
+                <div style="display: flex; justify-content: space-between; margin-bottom: 10px;">
+                    <span>Price:</span>
+                    <span><b>${black_price:.2f}</b></span>
+                </div>
+                <div style="display: flex; justify-content: space-between; margin-bottom: 10px;">
+                    <span>ETA:</span>
+                    <span><b>{est_time_mins} min</b></span>
+                </div>
+            </div>
+            """, unsafe_allow_html=True)
+        
+        st.caption("These are estimated prices based on distance and time. Actual prices may vary.")
     
     except Exception as e:
         st.error(f"Error calculating or displaying route: {str(e)}")
@@ -1809,12 +1955,25 @@ def display_training_tab():
                     st.error("Error: Selected features or target variable is empty.")
                     return
                 
+                # NEW: Check if the target variable has enough variation
+                if y.nunique() <= 1:
+                    st.error("Error: Target variable (surge_multiplier) has no variation. All values are identical.")
+                    return
+                
+                # NEW: Check if surge_multiplier values seem valid
+                if y.min() == y.max():
+                    st.error(f"Error: All surge_multiplier values are identical ({y.min()}). Training would be meaningless.")
+                    return
+                elif y.std() < 0.01:
+                    st.warning(f"Warning: Very low variation in surge_multiplier (std={y.std():.4f}). Results may not be reliable.")
+                
                 # Check for invalid values
                 if X.isna().any().any():
                     st.warning("Warning: Selected features contain NA values. They will be handled by the model.")
                 
                 # Display debug information
                 st.write(f"Training with {len(X)} samples and {len(selected_features)} features")
+                st.write(f"Surge multiplier range: {y.min():.2f} to {y.max():.2f}, mean: {y.mean():.2f}, std: {y.std():.2f}")
                 
                 # Create output directory if it doesn't exist
                 os.makedirs('models', exist_ok=True)
@@ -1826,22 +1985,79 @@ def display_training_tab():
                 progress_bar = st.progress(0)
                 placeholder = st.empty()
                 
-                # Mock training progress
-                for i in range(101):
-                    progress = i / 100
-                    placeholder.text(f"Training progress: {i}%")
-                    progress_bar.progress(progress)
-                    if i < 80:  # Slow down the first 80%
-                        time.sleep(0.05)
-                    else:  # Speed up the last 20%
-                        time.sleep(0.02)
-                
-                # Actual training
-                metrics = model.train(X, y, test_size=test_size)
+                # Start actual training (with progress updates)
+                try:
+                    # Split data for training validation
+                    from sklearn.model_selection import train_test_split
+                    X_train, X_test, y_train, y_test = train_test_split(X, y, test_size=test_size, random_state=int(random_state))
+                    
+                    # Check for potential leakage by looking for perfect correlations between features
+                    high_corr_pairs = []
+                    corr_matrix = X.corr().abs()
+                    upper_tri = corr_matrix.where(np.triu(np.ones(corr_matrix.shape), k=1).astype(bool))
+                    for col in upper_tri.columns:
+                        high_corr = upper_tri[col][upper_tri[col] > 0.95].index.tolist()
+                        if high_corr:
+                            for feat in high_corr:
+                                high_corr_pairs.append((col, feat, corr_matrix.loc[col, feat]))
+                    
+                    if high_corr_pairs:
+                        st.warning("Warning: Found highly correlated features (>0.95):")
+                        for col1, col2, corr in high_corr_pairs[:5]:  # Show first 5 pairs
+                            st.write(f"- {col1} and {col2}: {corr:.3f}")
+                        
+                        if len(high_corr_pairs) > 5:
+                            st.write(f"...and {len(high_corr_pairs)-5} more pairs")
+                    
+                    # Update progress
+                    placeholder.text("Starting model training...")
+                    progress_bar.progress(0.05)
+                    
+                    # Actual training
+                    metrics = model.train(X, y, test_size=test_size)
+                    
+                    # Update progress
+                    placeholder.text("Model training completed!")
+                    progress_bar.progress(1.0)
+                    
+                    # Perform cross-validation to verify results
+                    from sklearn.model_selection import cross_val_score
+                    from sklearn.metrics import r2_score, mean_squared_error
+                    import numpy as np
+                    
+                    if model.model is not None:
+                        placeholder.text("Performing cross-validation to verify results...")
+                        progress_bar.progress(0.9)
+                        
+                        # Get scaled data from the model
+                        X_scaled = model.scaler.transform(X)
+                        
+                        # Compute cross-validation scores
+                        r2_scores = cross_val_score(model.model, X_scaled, y, cv=int(cv_folds), scoring='r2')
+                        
+                        # Add to metrics
+                        metrics['cv_r2_mean'] = np.mean(r2_scores)
+                        metrics['cv_r2_std'] = np.std(r2_scores)
+                        
+                        # Check if the model is overfitting (perfect score on training, poor on CV)
+                        if metrics['r2'] > 0.99 and metrics['cv_r2_mean'] < 0.9:
+                            st.warning("Warning: Model shows signs of overfitting. The model performs perfectly on the test set but worse on cross-validation.")
+                    
+                    placeholder.text("Training completed!")
+                    progress_bar.progress(1.0)
+                    
+                except Exception as e:
+                    st.error(f"Error during model training: {str(e)}")
+                    import traceback
+                    st.error(traceback.format_exc())
+                    return
                 
                 # Check if metrics are valid
-                if all(value == 0 for value in metrics.values()):
-                    st.warning("Warning: All metrics are 0. This might indicate a problem with the data or model.")
+                if all(value == 0 for key, value in metrics.items() if key not in ['r2', 'cv_r2_mean', 'cv_r2_std']):
+                    st.warning("Warning: All error metrics are 0. This typically indicates an invalid model or data leakage issue.")
+                
+                if metrics.get('r2') == 1.0:
+                    st.warning("Warning: Perfect R² score of 1.0 suggests data leakage or overfitting. Real-world models rarely achieve perfect scores.")
                 
                 # Create model metadata
                 model.metadata = {

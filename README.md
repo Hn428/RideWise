@@ -58,26 +58,35 @@ pip install -r requirements.txt
 
 ## API Keys Configuration
 
-This application requires two API keys to enable weather data retrieval and route visualization:
+This application requires API keys to enable weather data retrieval, route visualization, and Uber price estimates:
 
 1. **OpenWeatherMap API Key** - For real-time weather data
 2. **Google Maps API Key** - For route visualization and distance calculation
+3. **Uber OAuth Credentials** - For real-time price estimates from Uber
 
 Create a `.env` file in the project root directory with the following contents:
 
 ```
-weather_api=YOUR_OPENWEATHERMAP_API_KEY
-google_maps=YOUR_GOOGLE_MAPS_API_KEY
+weather_api_key=YOUR_OPENWEATHERMAP_API_KEY
+google_maps_api_key=YOUR_GOOGLE_MAPS_API_KEY
+uber_client_id=YOUR_UBER_CLIENT_ID
+uber_client_secret=YOUR_UBER_CLIENT_SECRET
 ```
 
 ### How to obtain the API keys:
 
 - **OpenWeatherMap API Key**: Register at [OpenWeatherMap](https://openweathermap.org/api) and get a free API key
 - **Google Maps API Key**: Get a key from the [Google Cloud Console](https://developers.google.com/maps/documentation/embed/get-api-key)
+- **Uber OAuth Credentials**: 
+  1. Register as a developer at the [Uber Developer Portal](https://developer.uber.com/)
+  2. Create a new application
+  3. Note your Client ID and Client Secret (these are different from a server token)
+  4. For the OAuth 2.0 client credentials flow, you'll need to specify appropriate scopes for your application (typically 'pricing')
 
 Note: The application will still work without these keys, but with limited functionality:
 - Without the weather API key, you'll need to input weather data manually
 - Without the Google Maps API key, a simplified map will be shown without route details
+- Without the Uber credentials, estimated prices will be shown instead of real-time Uber prices
 
 ## Running the Application
 

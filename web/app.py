@@ -30,8 +30,14 @@ sys.path.append(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 
 # Load environment variables
 load_dotenv()
-WEATHER_API_KEY = os.getenv("weather_api_key")
+WEATHER_API_KEY = os.getenv("WEATHER_API_KEY")  # Changed from "weather_api_key" to "WEATHER_API_KEY"
 GOOGLE_MAPS_API_KEY = os.getenv("google_maps_api_key")  # Add Google Maps API key
+
+# Check for missing API keys and provide guidance
+if not WEATHER_API_KEY:
+    print("WARNING: WEATHER_API_KEY not found in environment variables.")
+    print("Please add WEATHER_API_KEY=your_api_key to your .env file")
+    print("Get an API key from: https://openweathermap.org/api")
 
 # Fix for SSL certificate verification issues - FOR TESTING ONLY
 ssl._create_default_https_context = ssl._create_unverified_context
@@ -292,6 +298,12 @@ def fetch_weather_data(lat, lon):
         Dict containing weather data or None if API call fails
     """
     try:
+        # Check if API key is available
+        if not WEATHER_API_KEY:
+            st.error("Weather API key not found. Please add WEATHER_API_KEY to your .env file.")
+            st.info("Get an API key from: https://openweathermap.org/api")
+            return None
+            
         # API endpoint for current weather
         url = f"https://api.openweathermap.org/data/2.5/weather?lat={lat}&lon={lon}&units=metric&appid={WEATHER_API_KEY}"
         
@@ -1376,7 +1388,7 @@ def display_prediction_tab():
         # Option to use real-time weather data
         use_real_weather = st.checkbox("Use real-time weather data", value=st.session_state.use_real_weather, key="use_real_weather")
         
-        # Update session state if changed
+        # Update session state if changed (through the checkbox)
         if use_real_weather != st.session_state.use_real_weather:
             st.session_state.use_real_weather = use_real_weather
             
@@ -1436,42 +1448,52 @@ def display_prediction_tab():
                 precipitation_type = weather_data['precipitation_type']
             else:
                 st.error("Failed to fetch weather data. Using manual inputs.")
+                # Don't modify session state directly after widget creation
+                # Instead, set our local variable and use that
                 use_real_weather = False
-                st.session_state.use_real_weather = False
+                # Remove this line to avoid the error
+                # st.session_state.use_real_weather = False
         
         # Manual weather inputs as fallback or if real-time data is not selected
         if not use_real_weather:
+            # Create temp variables first to avoid modifying session state after widget creation
+            temperature_val = st.session_state.manual_temperature
+            humidity_val = st.session_state.manual_humidity
+            wind_speed_val = st.session_state.manual_wind_speed
+            precipitation_type_val = st.session_state.manual_precipitation_type
+            
             temperature = st.slider("Temperature (°C)", 
                                    min_value=-10.0, 
                                    max_value=40.0, 
-                                   value=st.session_state.manual_temperature, 
+                                   value=temperature_val, 
                                    step=0.5,
                                    key="manual_temperature")
             
             humidity = st.slider("Humidity (%)", 
                                min_value=0.0, 
                                max_value=100.0, 
-                               value=st.session_state.manual_humidity, 
+                               value=humidity_val, 
                                step=5.0,
                                key="manual_humidity")
             
             wind_speed = st.slider("Wind Speed (km/h)", 
                                  min_value=0.0, 
                                  max_value=50.0, 
-                                 value=st.session_state.manual_wind_speed, 
+                                 value=wind_speed_val, 
                                  step=1.0,
                                  key="manual_wind_speed")
             
             precipitation_type = st.selectbox("Weather Condition", 
                                            ["clear", "rain", "snow", "fog", "hail", "thunderstorm", "sleet"],
-                                           index=["clear", "rain", "snow", "fog", "hail", "thunderstorm", "sleet"].index(st.session_state.manual_precipitation_type),
+                                           index=["clear", "rain", "snow", "fog", "hail", "thunderstorm", "sleet"].index(precipitation_type_val),
                                            key="manual_precipitation_type")
             
-            # Update session state
-            st.session_state.manual_temperature = temperature
-            st.session_state.manual_humidity = humidity
-            st.session_state.manual_wind_speed = wind_speed
-            st.session_state.manual_precipitation_type = precipitation_type
+            # Don't update session state here since the widgets already did that
+            # Remove these lines to fix the session state error
+            # st.session_state.manual_temperature = temperature
+            # st.session_state.manual_humidity = humidity 
+            # st.session_state.manual_wind_speed = wind_speed
+            # st.session_state.manual_precipitation_type = precipitation_type
     
     st.markdown("</div>", unsafe_allow_html=True)  # End time-weather-section
     

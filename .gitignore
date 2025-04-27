@@ -3,6 +3,7 @@ venv/
 env/
 ENV/
 .env
+test_weather_api.py
 
 # Python cache files
 __pycache__/

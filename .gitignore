@@ -2,8 +2,8 @@
 venv/
 env/
 ENV/
-.env
 test_weather_api.py
+test_api_simple.py
 
 # Python cache files
 __pycache__/
@@ -24,7 +24,6 @@ models/*.joblib
 
 # IDE specific files
 .idea/
-.vscode/
 *.swp
 *.swo
 
@@ -34,3 +33,5 @@ models/*.joblib
 # Logs
 logs/
 *.log
+config.bat
+node_modules

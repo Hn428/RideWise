@@ -19,9 +19,19 @@ import sys
 # Add parent directory to path so we can import from src
 sys.path.append(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 
+# -------------------------------------------------------------------------
+# NOTE: This application now uses Google Maps for route visualization.
+# To use this feature, you need to:
+# 1. Get a Google Maps API key from https://developers.google.com/maps/documentation/embed/get-api-key
+# 2. Add the key to your .env file as: google_maps=YOUR_API_KEY_HERE
+# 
+# If no API key is provided, the app will fallback to a simple map without routing.
+# -------------------------------------------------------------------------
+
 # Load environment variables
 load_dotenv()
 WEATHER_API_KEY = os.getenv("weather_api")
+GOOGLE_MAPS_API_KEY = os.getenv("google_maps")  # Add Google Maps API key
 
 # Fix for SSL certificate verification issues - FOR TESTING ONLY
 ssl._create_default_https_context = ssl._create_unverified_context
@@ -55,6 +65,46 @@ def reverse_geocode(lat, lon):
             return data['display_name']
     except Exception as e:
         st.error(f"Reverse geocoding error: {str(e)}")
+    return None
+
+def get_google_maps_distance(source_lat, source_long, dest_lat, dest_long):
+    """
+    Get the driving distance between two points using Google Maps Directions API.
+    
+    Returns:
+        Tuple of (distance_in_km, duration_in_minutes) or None if API call fails
+    """
+    if not GOOGLE_MAPS_API_KEY:
+        return None
+        
+    try:
+        # Call the Google Maps Directions API
+        url = f"https://maps.googleapis.com/maps/api/directions/json?origin={source_lat},{source_long}&destination={dest_lat},{dest_long}&key={GOOGLE_MAPS_API_KEY}"
+        response = requests.get(url)
+        data = response.json()
+        
+        if data.get("status") == "OK" and data.get("routes") and len(data["routes"]) > 0:
+            # Get the first route
+            route = data["routes"][0]
+            # Get the legs (there's usually just one for direct routes)
+            legs = route["legs"]
+            if legs and len(legs) > 0:
+                # Extract distance and duration
+                distance_data = legs[0].get("distance", {})
+                duration_data = legs[0].get("duration", {})
+                
+                # Get distance in kilometers
+                distance_in_meters = distance_data.get("value", 0)
+                distance_in_km = distance_in_meters / 1000.0
+                
+                # Get duration in minutes
+                duration_in_seconds = duration_data.get("value", 0)
+                duration_in_minutes = round(duration_in_seconds / 60.0)
+                
+                return (distance_in_km, duration_in_minutes)
+    except Exception as e:
+        pass  # Silent failure, we'll fall back to the straight line calculation
+        
     return None
 
 def get_weather_emoji(weather_type):
@@ -743,121 +793,22 @@ def load_data():
     return merged_df, processor, True
 
 
-def create_surge_trend_plot(df, time_group='hour'):
-    """Create a plot showing surge trends over time."""
-    if time_group == 'hour':
-        # Group by hour - use string to avoid KeyError
-        group_data = df.groupby('hour')['surge_multiplier'].mean().reset_index()
-        x_label = 'Hour of Day'
-        x_col = 'hour'
-    else:
-        # Group by day of week
-        group_data = df.groupby('day_of_week')['surge_multiplier'].mean().reset_index()
-        day_mapping = {
-            0: 'Monday', 1: 'Tuesday', 2: 'Wednesday',
-            3: 'Thursday', 4: 'Friday', 5: 'Saturday', 6: 'Sunday'
-        }
-        group_data['day_name'] = group_data['day_of_week'].map(day_mapping)
-        x_label = 'Day of Week'
-        x_col = 'day_name'
-    
-    # Create the plot
-    fig = px.line(
-        group_data, 
-        x=x_col, 
-        y='surge_multiplier',
-        title=f'Average Surge Multiplier by {x_label}',
-        markers=True
-    )
-    
-    # Update layout
-    fig.update_layout(
-        xaxis_title=x_label,
-        yaxis_title='Average Surge Multiplier'
-    )
-    
-    return fig
-
-def create_weather_impact_plot(df):
-    """Create a plot showing weather impact on surge pricing."""
-    if 'precipitation_type' not in df.columns:
-        return None
-    
-    # Group by precipitation type - use string to avoid KeyError
-    weather_impact = df.groupby('precipitation_type')['surge_multiplier'].mean().reset_index()
-    
-    # Create the plot
-    fig = px.bar(
-        weather_impact,
-        x='precipitation_type',
-        y='surge_multiplier',
-        title='Impact of Weather Conditions on Surge Pricing',
-        color='surge_multiplier'
-    )
-    
-    # Update layout
-    fig.update_layout(
-        xaxis_title='Weather Condition',
-        yaxis_title='Average Surge Multiplier'
-    )
-    
-    return fig
-
-def create_price_history_plot(df, time_window=24):
-    """Create a plot showing price history."""
-    if 'timestamp' not in df.columns:
-        return None
-    
-    # Create a proper copy to avoid SettingWithCopyWarning
-    df_window = df.copy()
-    
-    # Filter to the time window
-    if time_window:
-        latest_time = df_window['timestamp'].max()
-        cutoff_time = latest_time - pd.Timedelta(hours=time_window)
-        df_window = df_window[df_window['timestamp'] >= cutoff_time].copy()
-    
-    # Group by hour - use 'h' instead of 'H' to avoid deprecation warning
-    df_window.loc[:, 'hour_bin'] = df_window['timestamp'].dt.floor('h')
-    
-    # Check if cab_type exists
-    if 'cab_type' in df_window.columns:
-        hourly_data = df_window.groupby(['hour_bin', 'cab_type']).agg({
-            'surge_multiplier': 'mean'
-        }).reset_index()
-        
-        # Create the plot
-        fig = px.line(
-            hourly_data, 
-            x='hour_bin', 
-            y='surge_multiplier', 
-            color='cab_type',
-            title=f'Surge Multiplier History (Past {time_window} Hours)'
-        )
-    else:
-        hourly_data = df_window.groupby('hour_bin').agg({
-            'surge_multiplier': 'mean'
-        }).reset_index()
-        
-        # Create the plot
-        fig = px.line(
-            hourly_data, 
-            x='hour_bin', 
-            y='surge_multiplier',
-            title=f'Surge Multiplier History (Past {time_window} Hours)'
-        )
-    
-    # Update layout
-    fig.update_layout(
-        xaxis_title='Time',
-        yaxis_title='Average Surge Multiplier'
-    )
-    
-    return fig
-
 def display_prediction_tab():
     """Display the prediction tab content"""
     st.header("Predict Surge Pricing", anchor=False)
+    
+    # Check for Google Maps API key
+    if not GOOGLE_MAPS_API_KEY:
+        st.warning("""
+        **Google Maps API Key Not Found**
+        
+        For the best experience with route visualization, please:
+        1. Get a Google Maps API key from the [Google Cloud Console](https://developers.google.com/maps/documentation/embed/get-api-key)
+        2. Add the key to your `.env` file as `google_maps=YOUR_API_KEY_HERE`
+        3. Restart the application
+        
+        The app will continue to work with limited mapping functionality.
+        """)
     
     # Get available models
     available_models = get_available_models()
@@ -1149,100 +1100,60 @@ def display_prediction_tab():
     try:
         # Calculate distance (simple approximation)
         distance = np.sqrt((dest_lat - source_lat)**2 + (dest_long - source_long)**2) * 111  # Approx km
+        est_time_mins = max(1, int(distance / 30 * 60))  # Ensure at least 1 min
+        
+        # Try to get more accurate distance from Google Maps API
+        google_maps_result = get_google_maps_distance(source_lat, source_long, dest_lat, dest_long)
+        if google_maps_result:
+            distance, est_time_mins = google_maps_result  # Unpack distance and duration
         
         # Show map with markers for pickup and dropoff
         st.markdown(f"**From:** {st.session_state.source_location_name} 🚩 **To:** {st.session_state.dropoff_location_name} 🏁")
         
-        # Create a DataFrame for map locations
+        # Create map_data for showing markers
         map_data = pd.DataFrame({
             'lat': [source_lat, dest_lat],
             'lon': [source_long, dest_long],
             'location': ['Pickup', 'Dropoff'] # Simple labels for tooltip
         })
         
-        # Get routing directions between points
-        def get_route_coordinates(source_lat, source_long, dest_lat, dest_long):
-            try:
-                # Using Open Source Routing Machine (OSRM) which doesn't require API key
-                url = f"https://router.project-osrm.org/route/v1/driving/{source_long},{source_lat};{dest_long},{dest_lat}?overview=full&geometries=geojson"
-                response = requests.get(url, timeout=10)  # Increased timeout to 10 seconds
-                if response.status_code == 200:
-                    data = response.json()
-                    if data["code"] == "Ok":
-                        # Extract coordinates from the response
-                        coordinates = data["routes"][0]["geometry"]["coordinates"]
-                        # OSRM returns [lon, lat] pairs, so we need to swap them for Plotly
-                        route_lons = [coord[0] for coord in coordinates]
-                        route_lats = [coord[1] for coord in coordinates]
-                        return route_lats, route_lons
-            except Exception as e:
-                st.warning(f"Using direct route. Could not fetch detailed directions: {str(e)}")
-            
-            # Fallback to straight line if API fails
-            return [source_lat, dest_lat], [source_long, dest_long]
-        
         # Get route coordinates
         with st.spinner("Getting route directions..."):
-            route_lats, route_lons = get_route_coordinates(source_lat, source_long, dest_lat, dest_long)
-        
-        # Create a map with route directions using Plotly
-        fig = go.Figure()
-        
-        # Add the route line (using the fetched coordinates)
-        fig.add_trace(go.Scattermapbox(
-            mode="lines",
-            lon=route_lons,
-            lat=route_lats,
-            line=dict(width=3, color="#27B666"),
-            name="Route"
-        ))
-        
-        # Add pickup marker
-        fig.add_trace(go.Scattermapbox(
-            mode="markers",
-            lon=[source_long],
-            lat=[source_lat],
-            marker=dict(size=12, color="#FF0000", symbol="circle"),
-            name="Pickup",
-            text=["Pickup"]
-        ))
-        
-        # Add dropoff marker
-        fig.add_trace(go.Scattermapbox(
-            mode="markers",
-            lon=[dest_long],
-            lat=[dest_lat],
-            marker=dict(size=12, color="#0000FF", symbol="circle"),
-            name="Dropoff",
-            text=["Dropoff"]
-        ))
-        
-        # Set map center and zoom
-        center_lat = (source_lat + dest_lat) / 2
-        center_lon = (source_long + dest_long) / 2
-        
-        # Configure the layout - fix the invalid properties
-        fig.update_layout(
-            # Main layout configuration
-            dragmode="pan",  # Set drag mode at the top level
-            margin=dict(l=0, r=0, t=0, b=0),
-            height=300,
-            showlegend=False,
+            # Create a Google Maps iframe to display the route
+            def get_google_maps_embed_url(source_lat, source_long, dest_lat, dest_long):
+                """Generate a Google Maps embed URL for the route"""
+                base_url = "https://www.google.com/maps/embed/v1/directions"
+                mode = "driving"  # Options: driving, walking, bicycling, transit
+                origin = f"{source_lat},{source_long}"
+                destination = f"{dest_lat},{dest_long}"
+                
+                if GOOGLE_MAPS_API_KEY:
+                    return f"{base_url}?key={GOOGLE_MAPS_API_KEY}&mode={mode}&origin={origin}&destination={destination}"
+                else:
+                    st.warning("Google Maps API key not found. Please add it to your .env file as 'google_maps'.")
+                    return None
             
-            # Mapbox-specific configuration
-            mapbox=dict(
-                style="carto-positron",
-                center=dict(lat=center_lat, lon=center_lon),
-                zoom=11,
-                uirevision=True
-            ),
+            # Get the embed URL
+            maps_embed_url = get_google_maps_embed_url(source_lat, source_long, dest_lat, dest_long)
             
-            # Add modebar buttons including zoom controls
-            modebar_add=["zoomIn", "zoomOut", "resetViewMapbox", "toImage"]
-        )
-        
-        # Display the map
-        st.plotly_chart(fig, use_container_width=True)
+            if maps_embed_url:
+                # Display Google Maps in an iframe with better styling
+                st.markdown(f"<h4 style='text-align: center; margin-bottom: 10px;'>📍 Route from {st.session_state.source_location_name} to {st.session_state.dropoff_location_name}</h4>", unsafe_allow_html=True)
+                map_html = f"""
+                <div style="width:100%; height:350px; margin-bottom:15px; border-radius:10px; overflow:hidden; box-shadow: 0 4px 8px rgba(0,0,0,0.3); border: 1px solid rgba(39, 182, 102, 0.3);">
+                    <iframe width="100%" height="100%" frameborder="0" style="border:0" 
+                    src="{maps_embed_url}" allowfullscreen>
+                    </iframe>
+                </div>
+                """
+                st.markdown(map_html, unsafe_allow_html=True)
+            else:
+                # Fallback to basic display if Google Maps API key is missing
+                st.warning("Google Maps route visualization requires an API key. Using simple map instead.")
+                st.info(f"Route from {st.session_state.source_location_name} to {st.session_state.dropoff_location_name}")
+                
+                # Show simple map with markers (without route)
+                st.map(map_data)
         
         # Display route information
         route_col1, route_col2, route_col3 = st.columns(3)
@@ -1250,7 +1161,6 @@ def display_prediction_tab():
             st.metric("Distance", f"{distance:.2f} km")
         with route_col2:
             # Estimate time (assuming average speed of 30 km/h in the city)
-            est_time_mins = max(1, int(distance / 30 * 60)) # Ensure at least 1 min
             st.metric("Est. Time", f"{est_time_mins} min")
         with route_col3:
             # Calculate base price
@@ -1712,91 +1622,53 @@ def display_prediction_tab():
         # --- End Cheapest Time Section ---
 
 
-def display_dashboard_tab():
-    """Display the dashboard tab content"""
-    st.header("Surge Pricing Dashboard", anchor=False)
+def display_about_tab():
+    """Display the about tab content"""
+    st.header("About Surge Price Predictor", anchor=False)
     
-    # Load data
-    data, processor, success = load_data()
+    st.markdown("""
+    ### Overview
     
-    if not success:
-        st.warning("⚠️ Required data files not found. Please upload cab_rides.csv and weather.csv files to the data folder.")
-        return
+    The Surge Price Predictor is a machine learning application designed to predict ride-sharing surge pricing based on various factors like time, weather, location, and demand.
     
-    # Extract time features if needed
-    if 'timestamp' in data.columns and 'hour' not in data.columns:
-        data = data.copy()  # Make a proper copy to avoid SettingWithCopyWarning
-        data.loc[:, 'hour'] = data['timestamp'].dt.hour
-        data.loc[:, 'day_of_week'] = data['timestamp'].dt.dayofweek
-        data.loc[:, 'is_weekend'] = data['day_of_week'].isin([5, 6]).astype(int)
-        data.loc[:, 'is_rush_hour'] = ((data['hour'] >= 7) & (data['hour'] <= 9) | 
-                              (data['hour'] >= 16) & (data['hour'] <= 18)).astype(int)
+    ### Features
     
-    # Display key metrics
-    st.subheader("Key Metrics")
+    * **Surge Price Prediction**: Get accurate predictions of surge multipliers for your ride
+    * **Custom Model Training**: Train models with your own data and feature selection
+    * **Weather Integration**: See how weather conditions affect surge pricing
+    * **Google Maps Integration**: Visualize routes with Google Maps
     
-    metric1, metric2, metric3, metric4 = st.columns(4)
+    ### How It Works
     
-    with metric1:
-        avg_surge = data['surge_multiplier'].mean()
-        st.metric("Average Surge", f"{avg_surge:.2f}x")
+    1. **Data Collection**: The system collects ride and weather data
+    2. **Feature Engineering**: Extracts and transforms features from the data
+    3. **Model Training**: Trains machine learning models on the processed data
+    4. **Prediction**: Uses trained models to predict surge multipliers
     
-    with metric2:
-        max_surge = data['surge_multiplier'].max()
-        st.metric("Maximum Surge", f"{max_surge:.2f}x")
+    ### Technologies Used
     
-    with metric3:
-        avg_price = data['price'].mean() if 'price' in data.columns else 0
-        st.metric("Average Price", f"${avg_price:.2f}")
+    * **Python**: Core programming language
+    * **Streamlit**: Web application framework
+    * **Pandas & NumPy**: Data manipulation and analysis
+    * **Scikit-learn & XGBoost**: Machine learning models
+    * **Google Maps API**: Route visualization
+    """)
     
-    with metric4:
-        data_points = len(data)
-        st.metric("Data Points", f"{data_points:,}")
+    st.markdown("---")
     
-    # Visualizations
-    st.subheader("Surge Analysis")
+    st.markdown("""
+    ### How to Use
     
-    tab1, tab2, tab3 = st.tabs(["Time Analysis", "Weather Impact", "Price History"])
+    1. **Prediction Tab**: Enter ride details and get a surge price prediction
+    2. **Training Tab**: Train custom models with your own feature selection
     
-    with tab1:
-        view_option = st.radio("View By:", ["Hour of Day", "Day of Week"], horizontal=True)
-        
-        if view_option == "Hour of Day":
-            fig = create_surge_trend_plot(data, time_group='hour')
-        else:
-            fig = create_surge_trend_plot(data, time_group='day_of_week')
-        
-        st.plotly_chart(fig, use_container_width=True)
-        
-        st.markdown("""
-        *The chart above shows how surge pricing varies throughout the day or week. 
-        Higher peaks indicate times when surge pricing is most common.*
-        """)
+    ### Data Requirements
     
-    with tab2:
-        fig = create_weather_impact_plot(data)
-        if fig:
-            st.plotly_chart(fig, use_container_width=True)
-            
-            st.markdown("""
-            *This visualization shows how different weather conditions affect surge pricing.
-            Poor weather conditions like rain and snow often lead to higher surge multipliers.*
-              """)
-        else:
-            st.info("Weather impact visualization not available for this dataset.")
+    The application requires two CSV files in the `data` directory:
     
-    with tab3:
-        time_window = st.slider("Time Window (hours)", min_value=6, max_value=72, value=24, step=6)
-        fig = create_price_history_plot(data, time_window=time_window)
-        if fig:
-            st.plotly_chart(fig, use_container_width=True)
-            
-            st.markdown("""
-            *This chart displays the surge multiplier history over the selected time window. 
-            It helps identify trends and patterns in surge pricing over time.*
-            """)
-        else:
-            st.info("Price history visualization not available for this dataset.")
+    * `cab_rides.csv`: Contains ride data with columns for timestamp, source/destination coordinates, price, surge multiplier, etc.
+    * `weather.csv`: Contains weather data with columns for timestamp, temperature, humidity, wind speed, precipitation type, etc.
+    """)
 
 
 def display_training_tab():
@@ -1910,52 +1782,106 @@ def display_training_tab():
                 model_filename = custom_name
         
         with st.spinner(f"Training model {model_filename}... This may take a few minutes."):
-            # Prepare features for model
-            X = data[selected_features].copy()
-            y = data['surge_multiplier'].copy()
-            
-            # Create output directory if it doesn't exist
-            os.makedirs('models', exist_ok=True)
-            
-            # Create and train model
-            model = SurgePredictor(model_type=model_type)
-            
-            # Train model with progress bar
-            progress_bar = st.progress(0)
-            placeholder = st.empty()
-            
-            # Mock training progress
-            for i in range(101):
-                progress = i / 100
-                placeholder.text(f"Training progress: {i}%")
-                progress_bar.progress(progress)
-                if i < 80:  # Slow down the first 80%
-                    time.sleep(0.05)
-                else:  # Speed up the last 20%
-                    time.sleep(0.02)
-            
-            # Actual training
-            metrics = model.train(X, y, test_size=test_size)
-            
-            # Create model metadata
-            model.metadata = {
-                'model_type': model_type,
-                'test_size': test_size,
-                'cv_folds': cv_folds,
-                'random_state': random_state,
-                'feature_count': len(selected_features),
-                'features': selected_features,
-                'timestamp': current_time,
-                'metrics': metrics
-            }
-            
-            # Save model to the models directory with the selected filename
-            model_path = os.path.join('models', model_filename)
-            model.save_model(model_path)
-            
-            # Show final progress
-            placeholder.text("Training completed!")
-            progress_bar.progress(1.0)
+            try:
+                # Prepare features for model
+                # Check for duplicate features and remove them
+                unique_features = []
+                for feature in selected_features:
+                    if feature not in unique_features:
+                        unique_features.append(feature)
+                    else:
+                        st.warning(f"Removed duplicate feature: '{feature}'")
+                
+                # Use the de-duplicated feature list
+                selected_features = unique_features
+                
+                X = data[selected_features].copy()
+                y = data['surge_multiplier'].copy()
+                
+                # Additional check for duplicate columns in the DataFrame
+                duplicate_cols = X.columns[X.columns.duplicated()].tolist()
+                if duplicate_cols:
+                    st.warning(f"Removed the following duplicate columns: {duplicate_cols}")
+                    X = X.loc[:, ~X.columns.duplicated()]
+                
+                # Check if X and y are not empty
+                if X.empty or y.empty:
+                    st.error("Error: Selected features or target variable is empty.")
+                    return
+                
+                # Check for invalid values
+                if X.isna().any().any():
+                    st.warning("Warning: Selected features contain NA values. They will be handled by the model.")
+                
+                # Display debug information
+                st.write(f"Training with {len(X)} samples and {len(selected_features)} features")
+                
+                # Create output directory if it doesn't exist
+                os.makedirs('models', exist_ok=True)
+                
+                # Create and train model
+                model = SurgePredictor(model_type=model_type)
+                
+                # Train model with progress bar
+                progress_bar = st.progress(0)
+                placeholder = st.empty()
+                
+                # Mock training progress
+                for i in range(101):
+                    progress = i / 100
+                    placeholder.text(f"Training progress: {i}%")
+                    progress_bar.progress(progress)
+                    if i < 80:  # Slow down the first 80%
+                        time.sleep(0.05)
+                    else:  # Speed up the last 20%
+                        time.sleep(0.02)
+                
+                # Actual training
+                metrics = model.train(X, y, test_size=test_size)
+                
+                # Check if metrics are valid
+                if all(value == 0 for value in metrics.values()):
+                    st.warning("Warning: All metrics are 0. This might indicate a problem with the data or model.")
+                
+                # Create model metadata
+                model.metadata = {
+                    'model_type': model_type,
+                    'test_size': test_size,
+                    'cv_folds': cv_folds,
+                    'random_state': random_state,
+                    'feature_count': len(selected_features),
+                    'features': selected_features,
+                    'timestamp': current_time,
+                    'metrics': metrics
+                }
+                
+                # Save model to the models directory with the selected filename
+                model_path = os.path.join('models', model_filename)
+                model.save_model(model_path)
+                
+                # Show final progress
+                placeholder.text("Training completed!")
+                progress_bar.progress(1.0)
+                
+                # Display training data summary
+                with st.expander("Training Data Summary", expanded=False):
+                    st.write("Feature statistics:")
+                    st.dataframe(X.describe())
+                    
+                    st.write("Target variable statistics:")
+                    st.dataframe(pd.DataFrame({"surge_multiplier": y}).describe())
+                    
+                    # Check correlations with target
+                    if len(X) > 0:
+                        correlations = pd.concat([X, pd.Series(y, name='surge_multiplier')], axis=1).corr()['surge_multiplier'].drop('surge_multiplier')
+                        st.write("Correlations with target:")
+                        st.dataframe(correlations.sort_values(ascending=False))
+                
+            except Exception as e:
+                st.error(f"Error during model training: {str(e)}")
+                import traceback
+                st.error(traceback.format_exc())
+                return
         
         # Display training results
         st.success(f"Model trained successfully and saved as '{model_filename}'")
@@ -2011,56 +1937,6 @@ def display_training_tab():
         st.success(f"Model saved to models/surge_model.joblib")
 
 
-def display_about_tab():
-    """Display the about tab content"""
-    st.header("About Surge Price Predictor", anchor=False)
-    
-    st.markdown("""
-    ### Overview
-    
-    The Surge Price Predictor is a machine learning application designed to predict ride-sharing surge pricing based on various factors like time, weather, location, and demand.
-    
-    ### Features
-    
-    * **Surge Price Prediction**: Get accurate predictions of surge multipliers for your ride
-    * **Interactive Dashboard**: Visualize surge pricing patterns and trends
-    * **Custom Model Training**: Train models with your own data and feature selection
-    * **Weather Integration**: See how weather conditions affect surge pricing
-    
-    ### How It Works
-    
-    1. **Data Collection**: The system collects ride and weather data
-    2. **Feature Engineering**: Extracts and transforms features from the data
-    3. **Model Training**: Trains machine learning models on the processed data
-    4. **Prediction**: Uses trained models to predict surge multipliers
-    
-    ### Technologies Used
-    
-    * **Python**: Core programming language
-    * **Streamlit**: Web application framework
-    * **Pandas & NumPy**: Data manipulation and analysis
-    * **Scikit-learn & XGBoost**: Machine learning models
-    * **Plotly & Matplotlib**: Data visualization
-    """)
-    
-    st.markdown("---")
-    
-    st.markdown("""
-    ### How to Use
-    
-    1. **Prediction Tab**: Enter ride details and get a surge price prediction
-    2. **Dashboard Tab**: Explore surge pricing patterns and visualizations
-    3. **Training Tab**: Train custom models with your own feature selection
-    
-    ### Data Requirements
-    
-    The application requires two CSV files in the `data` directory:
-    
-    * `cab_rides.csv`: Contains ride data with columns for timestamp, source/destination coordinates, price, surge multiplier, etc.
-    * `weather.csv`: Contains weather data with columns for timestamp, temperature, humidity, wind speed, precipitation type, etc.
-    """)
-
-
 def main():
     """Main function to run the Streamlit app"""
     
@@ -2068,8 +1944,8 @@ def main():
     st.title("🚕 Surge Price Predictor")
     
     # Create tabs
-    tab1, tab2, tab3, tab4 = st.tabs([
-        "🔮 Prediction", "📊 Dashboard", "🧠 Training", "ℹ️ About"
+    tab1, tab2, tab3 = st.tabs([
+        "🔮 Prediction", "🧠 Training", "ℹ️ About"
     ])
     
     # Fill each tab with content
@@ -2077,12 +1953,9 @@ def main():
         display_prediction_tab()
     
     with tab2:
-        display_dashboard_tab()
-    
-    with tab3:
         display_training_tab()
     
-    with tab4:
+    with tab3:
         display_about_tab()
     
     # Footer

@@ -1373,7 +1373,8 @@ def display_prediction_tab():
         
         # Initialize weather session state if not present
         if 'use_real_weather' not in st.session_state:
-            st.session_state.use_real_weather = True
+            # Default to manual weather input since we're having API issues
+            st.session_state.use_real_weather = False
         if 'weather_data' not in st.session_state:
             st.session_state.weather_data = None
         if 'manual_temperature' not in st.session_state:
@@ -1386,7 +1387,7 @@ def display_prediction_tab():
             st.session_state.manual_precipitation_type = "clear"
         
         # Option to use real-time weather data
-        use_real_weather = st.checkbox("Use real-time weather data", value=st.session_state.use_real_weather, key="use_real_weather")
+        use_real_weather = st.checkbox("Use real-time weather data (requires API key)", value=st.session_state.use_real_weather, key="use_real_weather")
         
         # Update session state if changed (through the checkbox)
         if use_real_weather != st.session_state.use_real_weather:
